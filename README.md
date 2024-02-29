@@ -1,4 +1,4 @@
-# This project include python scripts for 
+# Python scripts for sft sentiment analysis on 4090
 <br />1)sft distibert for sentiment analysis
 <br />2)Lora/Qlora peft gemma2b for sentiment analysis
 <br />3)accuracy 96%+ after 2 epochs
