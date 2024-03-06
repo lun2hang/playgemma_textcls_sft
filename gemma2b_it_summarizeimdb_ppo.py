@@ -17,7 +17,7 @@ gemma_2b_it_ppo_local = "/DATA/jupyter/personal/gemma-2b-it-lora-ppo"
 summarization_number_eval = 100
 instruct = ".Preceding text is a imdb movie review.Please help summarize it."
 
-ppo_training_steps = 1
+ppo_training_steps = 20
 ppo_rewards_textlen_threshhold = 500
 
 #load dataset imdb
@@ -70,6 +70,7 @@ for i in range(summarization_number_eval):
 #calculate len_avg
 summarization_len /= summarization_number_eval
 print("the avg summarization length BEFORE PPO: %d" % summarization_len)
+summarization_len_before = summarization_len
 
 # 创建loRA参数
 lora_config = LoraConfig(task_type=TaskType.CAUSAL_LM, target_modules={"q_proj", "k_proj", "v_proj", "o_proj"}, r=8, lora_alpha=32)
@@ -90,24 +91,31 @@ ppo_config = {"mini_batch_size": 1, "batch_size": 1}
 config = PPOConfig(**ppo_config)
 ppo_trainer = PPOTrainer(config, model, ref_model=None, tokenizer=tokenizer)
 
-query_text = imdb["unsupervised"][0]['text'] + instruct
-query_tensor = tokenizer.encode(query_text, return_tensors="pt").to("cuda")
-generation_kwargs = {
-    "min_length": -1,
-    "top_k": 50,
-    "top_p": 0.95,
-    "do_sample": True,
-    "pad_token_id": tokenizer.eos_token_id,
-    "max_new_tokens": 256,
-}
-response_tensor = ppo_trainer.generate([item for item in query_tensor], return_prompt=False, **generation_kwargs)
-response_txt = tokenizer.decode(response_tensor[0])
-#rewards 低于基线输出长度有rewards，越短越好
-reward = 1.0 - min(ppo_rewards_textlen_threshhold,len(response_txt))/ppo_rewards_textlen_threshhold
-reward = [torch.tensor(reward, device=model.pretrained_model.device)]
+#training loop
+train_data_length = imdb['unsupervised'].num_rows
 
-#参数需要是list
-train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
+for i in range(ppo_training_steps):
+    data_index = i % train_data_length
+    query_text = imdb["unsupervised"][data_index]['text'] + instruct
+    query_tensor = tokenizer.encode(query_text, return_tensors="pt").to("cuda")
+    generation_kwargs = {
+        "min_length": -1,
+        "temperature": 0.7,
+        "top_k": 10,
+        "top_p": 0.9,
+        "do_sample": False,
+        "pad_token_id": tokenizer.eos_token_id,
+        "max_new_tokens": 256,
+    }
+    response_tensor = ppo_trainer.generate([item for item in query_tensor], return_prompt=False, **generation_kwargs)
+    response_txt = tokenizer.decode(response_tensor[0])
+    #rewards 低于基线输出长度有rewards，越短越好
+    reward = 1.0 - min(ppo_rewards_textlen_threshhold,len(response_txt))/ppo_rewards_textlen_threshhold
+    print("train step: %d reward: %f \n" % (i,reward))
+    reward = [torch.tensor(reward, device=model.pretrained_model.device)]
+
+    #参数需要是list
+    train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 #save model
 model.save_pretrained(gemma_2b_it_ppo_local)
 
@@ -152,7 +160,7 @@ for i in range(summarization_number_eval):
 #calculate len_avg
 summarization_len /= summarization_number_eval
 print("the avg summarization length AFTER PPO: %d" % summarization_len)
-
+print("the avg summarization length BEFORE PPO: %d" % summarization_len_before)
 #calculate len_avg and check if it is shorter
 
 print("end")
