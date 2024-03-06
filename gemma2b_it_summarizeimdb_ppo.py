@@ -14,6 +14,7 @@ dataset_imdb_local = "/DATA/jupyter/personal/imdb/plain_text"
 gemma_2b_it_local = "/DATA/jupyter/personal/gemma-2b-it"
 gemma_2b_it_ppo_local = "/DATA/jupyter/personal/gemma-2b-it-lora-ppo"
 
+summarization_number_baseline = 100
 summarization_number_eval = 100
 instruct = ".Preceding text is a imdb movie review.Please help summarize it."
 
@@ -49,7 +50,7 @@ textgen = pipeline(
 '''
 
 summarization_len = 0
-for i in range(summarization_number_eval):
+for i in range(summarization_number_baseline):
     comments = imdb["unsupervised"][i]['text']
     messages = [
         {"role": "user", "content": comments + instruct}
@@ -64,11 +65,12 @@ for i in range(summarization_number_eval):
         top_p=0.95
     )
     summarization_len += len(outputs[0]["generated_text"][len(prompt):])
+    print("step: %d, gen_len_avg: %f \n" % (i, summarization_len/(i+1)))
 #   print(comments)
 #   print(outputs[0]["generated_text"][len(prompt):])
 
 #calculate len_avg
-summarization_len /= summarization_number_eval
+summarization_len /= summarization_number_baseline
 print("the avg summarization length BEFORE PPO: %d" % summarization_len)
 summarization_len_before = summarization_len
 
@@ -100,10 +102,9 @@ for i in range(ppo_training_steps):
     query_tensor = tokenizer.encode(query_text, return_tensors="pt").to("cuda")
     generation_kwargs = {
         "min_length": -1,
-        "temperature": 0.7,
-        "top_k": 10,
-        "top_p": 0.9,
-        "do_sample": False,
+        "top_k": 0.0,
+        "top_p": 1.0,
+        "do_sample": True,
         "pad_token_id": tokenizer.eos_token_id,
         "max_new_tokens": 256,
     }
@@ -154,6 +155,7 @@ for i in range(summarization_number_eval):
         top_p=0.95
     )
     summarization_len += len(outputs[0]["generated_text"][len(prompt):])
+    print("step: %d, gen_len_avg: %f \n" % (i, summarization_len/(i+1)))
 #    print(comments)
 #    print(outputs[0]["generated_text"][len(prompt):])
 
