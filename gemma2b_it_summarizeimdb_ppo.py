@@ -3,7 +3,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, pipeline, AutoModelForCausalLM
 import torch
 import bitsandbytes
-from peft import TaskType, get_peft_model, LoraConfig
+from peft import TaskType, get_peft_model, LoraConfig, PeftConfig, PeftModel
 from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
 
 #This python script is a rl project for gemmaxb-it. 
@@ -14,7 +14,7 @@ dataset_imdb_local = "/DATA/jupyter/personal/imdb/plain_text"
 gemma_2b_it_local = "/DATA/jupyter/personal/gemma-2b-it"
 gemma_2b_it_ppo_local = "/DATA/jupyter/personal/gemma-2b-it-lora-ppo"
 
-summarization_number_eval = 1
+summarization_number_eval = 100
 instruct = ".Preceding text is a imdb movie review.Please help summarize it."
 
 ppo_training_steps = 1
@@ -31,7 +31,7 @@ imdb = load_dataset(
 tokenizer = AutoTokenizer.from_pretrained(gemma_2b_it_local)
 tokenizer.pad_token = tokenizer.eos_token
 
-pipeline = pipeline(
+textgen = pipeline(
     "text-generation",
     model=gemma_2b_it_local,
     model_kwargs={
@@ -54,8 +54,8 @@ for i in range(summarization_number_eval):
     messages = [
         {"role": "user", "content": comments + instruct}
     ]
-    prompt = pipeline.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    outputs = pipeline(
+    prompt = textgen.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    outputs = textgen(
         prompt,
         max_new_tokens=256,
         do_sample=True,
@@ -69,7 +69,7 @@ for i in range(summarization_number_eval):
 
 #calculate len_avg
 summarization_len /= summarization_number_eval
-print(summarization_len)
+print("the avg summarization length BEFORE PPO: %d" % summarization_len)
 
 # 创建loRA参数
 lora_config = LoraConfig(task_type=TaskType.CAUSAL_LM, target_modules={"q_proj", "k_proj", "v_proj", "o_proj"}, r=8, lora_alpha=32)
@@ -112,6 +112,46 @@ train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
 model.save_pretrained(gemma_2b_it_ppo_local)
 
 #load trained model to summarize the comments
+peft_config = PeftConfig.from_pretrained(gemma_2b_it_ppo_local)
+tokenizer = AutoTokenizer.from_pretrained(peft_config.base_model_name_or_path)
+tokenizer.pad_token = tokenizer.eos_token
+
+base_model = AutoModelForCausalLM.from_pretrained(peft_config.base_model_name_or_path)
+inference_model = PeftModel.from_pretrained(base_model, gemma_2b_it_ppo_local)
+
+textgen = pipeline(
+    "text-generation",
+    model=inference_model,
+    tokenizer=tokenizer,
+    model_kwargs={
+            "torch_dtype": torch.bfloat16,
+        },
+    device="cuda",
+)
+
+summarization_len = 0
+for i in range(summarization_number_eval):
+    comments = imdb["unsupervised"][i]['text']
+    #对话模型使用pipeline推理需要拼对话格式，否则原文输出。这是为了便于管理对话上下文
+    messages = [
+        {"role": "user", "content": comments + instruct}
+    ]
+    prompt = textgen.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    outputs = textgen(
+        prompt,
+        max_new_tokens=256,
+        do_sample=True,
+        temperature=0.7,
+        top_k=50,
+        top_p=0.95
+    )
+    summarization_len += len(outputs[0]["generated_text"][len(prompt):])
+#    print(comments)
+#    print(outputs[0]["generated_text"][len(prompt):])
+
+#calculate len_avg
+summarization_len /= summarization_number_eval
+print("the avg summarization length AFTER PPO: %d" % summarization_len)
 
 #calculate len_avg and check if it is shorter
 
